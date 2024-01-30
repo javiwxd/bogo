@@ -10,9 +10,19 @@
 #include <Windows.h>
 #include <mutex>
 
+#include "bogo.h"
+#include "ui/ui.h"
+#ifdef USE_IMGUI
+#include "imgui/imgui.h"
+#endif
+
 std::atomic<bool> foundSorted(false);
 std::mutex mtx;
 std::vector<int> threadIterations;
+
+const int SCREEN_W = 1280;
+const int SCREEN_H = 720;
+
 
 bool is_sorted(const char* numStr) {
     size_t length = std::strlen(numStr);
@@ -64,7 +74,7 @@ void randomize_digits(char* numStr) {
     mpz_clear(num);
 }
 
-void bogosort_thread(const char* input, int threadId) {
+void bogosort_thread(const char* input, int threadId, UI* ui) {
     int count = 0;
     char* num = _strdup(input);
 
@@ -72,9 +82,22 @@ void bogosort_thread(const char* input, int threadId) {
         randomize_digits(num);
         ++count;
 
+#ifdef USE_IMGUI
+        //ImGui::DebugLog("Thread %d: %s\n", threadId, num); // this breaks D:
+#endif
+
+        ui->render_number(num);
+
+        ui->current_iteration = num;
+        ui->total_iterations++;
+
         if (is_sorted(num)) {
             foundSorted.store(true);
             std::cout << "Thread " << threadId << " found the sorted number: " << num << " after " << count << " iterations." << std::endl;
+            ui->success = true;
+            ui->render_number(num);
+            ui->current_iteration = num;
+            ui->total_iterations++;
         }
     }
 
@@ -125,6 +148,42 @@ std::string format_duration(const std::chrono::steady_clock::time_point& start,
     return formattedInterval;
 }
 
+void logic_thread(int num_threads, const char* num, UI* ui) {
+    std::vector<std::thread> threads;
+    threadIterations.resize(num_threads, 0);
+
+    std::cout << std::endl << "Starting " << num_threads << " threads to find the sorted number." << std::endl << std::endl;
+
+    ui->render_number(num);
+    
+    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+    ui->start_time = begin;
+
+    for (int i = 0; i < num_threads; ++i) {
+        threads.emplace_back(bogosort_thread, num, i, ui);
+    }
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+
+    int totalIterations = 0;
+    for (int i = 0; i < num_threads; ++i) {
+        totalIterations += threadIterations[i];
+    }
+
+    std::cout << std::endl << "=======================================" << std::endl;
+    std::cout << "Total iterations for all threads: " << totalIterations << std::endl;
+    std::cout << "Average iterations per thread: " << static_cast<double>(totalIterations) / static_cast<double>(num_threads) << std::endl;
+    std::cout << "Average iterations per second: " << static_cast<double>(totalIterations) / std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << std::endl;
+    std::cout << "Average iterations per second per thread: " << static_cast<double>(totalIterations) / static_cast<double>(num_threads) / std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << std::endl;
+    std::cout << "Total time: " << format_duration(begin, end) << std::endl;
+    std::cout << "=======================================" << std::endl << std::endl;
+}
+
 int __cdecl _main(int argc, char* argv[]) {
 
     SetConsoleCtrlHandler(ConsoleHandlerRoutine, true);
@@ -139,40 +198,17 @@ int __cdecl _main(int argc, char* argv[]) {
         std::cout << "The number is sorted" << std::endl;
     }
     else {
-        int numThreads = 8;
+        int num_threads = 8;
 
         std::cout << "Enter the number of threads to use (1 for single-threaded): ";
-        std::cin >> numThreads;
+        std::cin >> num_threads;
 
-        std::vector<std::thread> threads;
-        threadIterations.resize(numThreads, 0);
+        UI ui(SCREEN_W, SCREEN_H);
+        std::thread logic(logic_thread, num_threads, num, &ui);
 
-        std::cout << std::endl << "Starting " << numThreads << " threads to find the sorted number." << std::endl << std::endl;
+        ui.update();
 
-        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-
-        for (int i = 0; i < numThreads; ++i) {
-            threads.emplace_back(bogosort_thread, num, i);
-        }
-
-        for (auto& thread : threads) {
-            thread.join();
-        }
-
-        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-
-        int totalIterations = 0;
-        for (int i = 0; i < numThreads; ++i) {
-            totalIterations += threadIterations[i];
-        }
-
-        std::cout << std::endl << "=======================================" << std::endl;
-        std::cout << "Total iterations for all threads: " << totalIterations << std::endl;
-        std::cout << "Average iterations per thread: " << static_cast<double>(totalIterations) / static_cast<double>(numThreads) << std::endl;
-        std::cout << "Average iterations per second: " << static_cast<double>(totalIterations) / std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << std::endl;
-        std::cout << "Average iterations per second per thread: " << static_cast<double>(totalIterations) / static_cast<double>(numThreads) / std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << std::endl;
-        std::cout << "Total time: " << format_duration(begin, end) << std::endl;    
-        std::cout << "=======================================" << std::endl << std::endl;
+        ui.draw();
     }
 
     return 0;
